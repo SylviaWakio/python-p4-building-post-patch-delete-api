@@ -1,57 +1,134 @@
+from flask import Flask, jsonify, request, make_response
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import MetaData
-from sqlalchemy_serializer import SerializerMixin
+from flask_migrate import Migrate
 
-metadata = MetaData(naming_convention={
-    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
-})
+from models import db, User, Review, Game
 
-db = SQLAlchemy(metadata=metadata)
+app = Flask(__name__)
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///app.db"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["JSONIFY_PRETTYPRINT_REGULAR"] = True
 
-class Game(db.Model, SerializerMixin):
-    __tablename__ = 'games'
+migrate = Migrate(app, db)
 
-    serialize_rules = ('-reviews.game',)
+db.init_app(app)
 
-    id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String, unique=True)
-    genre = db.Column(db.String)
-    platform = db.Column(db.String)
-    price = db.Column(db.Integer)
-    created_at = db.Column(db.DateTime, server_default=db.func.now())
-    updated_at = db.Column(db.DateTime, onupdate=db.func.now())
 
-    reviews = db.relationship('Review', backref='game')
+@app.route("/")
+def index():
+    return "Index for Game/Review/User API"
 
-    def __repr__(self):
-        return f'<Game {self.title} for {self.platform}>'
 
-class Review(db.Model, SerializerMixin):
-    __tablename__ = 'reviews'
+@app.route("/games")
+def games():
+    games = []
+    for game in Game.query.all():
+        game_dict = game.to_dict()
+        games.append(game_dict)
 
-    serialize_rules = ('-game.reviews', '-user.reviews',)
-    
-    id = db.Column(db.Integer, primary_key=True)
-    score = db.Column(db.Integer)
-    comment = db.Column(db.String)
-    created_at = db.Column(db.DateTime, server_default=db.func.now())
-    updated_at = db.Column(db.DateTime, onupdate=db.func.now())
+    response = make_response(jsonify(games), 200)
 
-    game_id = db.Column(db.Integer, db.ForeignKey('games.id'))
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    return response
 
-    def __repr__(self):
-        return f'<Review ({self.id}) of {self.game}: {self.score}/10>'
 
-class User(db.Model, SerializerMixin):
-    __tablename__ = 'users'
+@app.route("/games/<int:id>")
+def game_by_id(id):
+    game = Game.query.filter_by(id=id).first()
 
-    serialize_rules = ('-reviews.user',)
+    game_dict = game.to_dict()
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String)
-    
-    created_at = db.Column(db.DateTime, server_default=db.func.now())
-    updated_at = db.Column(db.DateTime, onupdate=db.func.now())
+    response = make_response(jsonify(game_dict), 200)
 
-    reviews = db.relationship('Review', backref='user')
+    return response
+
+
+@app.route("/reviews", methods=["GET", "POST"])
+def reviews():
+    if request.method == "GET":
+        reviews = []
+        for review in Review.query.all():
+            review_dict = review.to_dict()
+            reviews.append(review_dict)
+
+        response = make_response(jsonify(reviews), 200)
+
+        return response
+
+    elif request.method == "POST":
+        new_review = Review(
+            score=request.form.get("score"),
+            comment=request.form.get("comment"),
+            game_id=request.form.get("game_id"),
+            user_id=request.form.get("user_id"),
+        )
+
+        db.session.add(new_review)
+        db.session.commit()
+
+        review_dict = new_review.to_dict()
+
+        response = make_response(jsonify(review_dict), 201)
+
+        return response
+
+
+@app.route("/reviews/<int:id>", methods=["GET", "PATCH", "DELETE"])
+def review_by_id(id):
+    review = Review.query.filter_by(id=id).first()
+
+    if review == None:
+        response_body = {
+            "message": "This record does not exist in our database. Please try again."
+        }
+        response = make_response(jsonify(response_body), 404)
+
+        return response
+
+    else:
+        if request.method == "GET":
+            review_dict = review.to_dict()
+
+            response = make_response(jsonify(review_dict), 200)
+
+            return response
+
+        elif request.method == "PATCH":
+            review = Review.query.filter_by(id=id).first()
+
+            for attr in request.form:
+                setattr(review, attr, request.form.get(attr))
+
+            db.session.add(review)
+            db.session.commit()
+
+            review_dict = review.to_dict()
+
+            response = make_response(jsonify(review_dict), 200)
+
+            return response
+
+        elif request.method == "DELETE":
+            db.session.delete(review)
+            db.session.commit()
+
+            response_body = {"delete_successful": True, "message": "Review deleted."}
+
+            response = make_response(jsonify(response_body), 200)
+
+            return response
+
+
+@app.route("/users")
+def users():
+    users = []
+    for user in User.query.all():
+        user_dict = user.to_dict()
+        users.append(user_dict)
+
+    response = make_response(jsonify(users), 200)
+
+    return response
+
+
+if __name__ == "__main__":
+    app.run(port=5555)
